@@ -1,0 +1,44 @@
+name: Vibe-Guard Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.github/workflows/vibe-guard-approve.yml'
+
+permissions:
+  pull-requests: write
+  statuses: write
+  contents: read
+
+jobs:
+  security_scan:
+    name: Run Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # fetch all history so git diff works against the base branch
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies and Semgrep
+        run: |
+          uv sync --dev
+          uv pip install semgrep
+
+      - name: Run Vibe-Guard PR Scan
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python vibe_guard/ci_runner.py

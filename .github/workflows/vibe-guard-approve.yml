@@ -1,0 +1,126 @@
+name: Vibe-Guard Manual Override
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+  statuses: write
+  contents: read
+
+jobs:
+  override_status:
+    name: Process Manual Override
+    runs-on: ubuntu-latest
+    steps:
+      - name: Handle Approval Override
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: python
+        run: |
+          import json
+          import os
+          import sys
+          import urllib.request
+          import urllib.error
+
+          # Parse environment
+          event_path = os.environ.get("GITHUB_EVENT_PATH")
+          token = os.environ.get("GITHUB_TOKEN")
+          repo = os.environ.get("GITHUB_REPOSITORY")
+
+          if not event_path or not token or not repo:
+              print("[!] Missing required environment variables.")
+              sys.exit(1)
+
+          with open(event_path, "r", encoding="utf-8") as f:
+              event_data = json.load(f)
+
+          # 1. Verify this is a comment on a Pull Request
+          comment = event_data.get("comment", {})
+          comment_body = comment.get("body", "").strip()
+
+          # Check if comment is exactly "/vibe-guard approve"
+          if comment_body != "/vibe-guard approve":
+              print(f"[*] Skipping comment: '{comment_body}' is not the override command.")
+              sys.exit(0)
+
+          # Check if it's on a pull request (issues webhook payload has "pull_request" key if it's a PR)
+          issue = event_data.get("issue", {})
+          if "pull_request" not in issue:
+              print("[*] Comment is on a standard issue, not a pull request. Skipping.")
+              sys.exit(0)
+
+          pr_number = issue.get("number")
+          commenter = comment.get("user", {}).get("login")
+
+          print(f"[*] Override comment detected on PR #{pr_number} by user '{commenter}'. Checking permissions...")
+
+          # Helper to request
+          def github_request(method, url, data=None):
+              req = urllib.request.Request(url, method=method)
+              req.add_header("Authorization", f"token {token}")
+              req.add_header("Accept", "application/vnd.github.v3+json")
+              req.add_header("User-Agent", "vibe-guard-override")
+              body = json.dumps(data).encode("utf-8") if data else None
+              with urllib.request.urlopen(req, data=body) as res:
+                  res_data = res.read()
+                  return json.loads(res_data.decode("utf-8")) if res_data else {}
+
+          # 2. Check if the commenter has admin or write access
+          perm_url = f"https://api.github.com/repos/{repo}/collaborators/{commenter}/permission"
+          try:
+              res = github_request("GET", perm_url)
+              permission = res.get("permission")
+              if permission not in ["admin", "write"]:
+                  print(f"[!] User '{commenter}' does not have admin/write permission (role: {permission}). Approval rejected.")
+                  # post a comment back indicating denial
+                  comment_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                  github_request("POST", comment_url, {"body": f"⚠️ @{commenter}, you do not have write permissions to override the security review check."})
+                  sys.exit(1)
+          except Exception as e:
+              print(f"[!] Error verifying collaborator permission: {e}")
+              sys.exit(1)
+
+          print(f"[*] User '{commenter}' is authorized. Retrieving PR head SHA...")
+
+          # 3. Retrieve pull request head SHA
+          pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+          try:
+              pr_data = github_request("GET", pr_url)
+              head_sha = pr_data.get("head", {}).get("sha")
+          except Exception as e:
+              print(f"[!] Error fetching pull request details: {e}")
+              sys.exit(1)
+
+          if not head_sha:
+              print("[!] Head SHA not found in PR details.")
+              sys.exit(1)
+
+          print(f"[*] Head SHA retrieved: {head_sha}. Setting status check to success...")
+
+          # 4. Set commit status to success
+          status_url = f"https://api.github.com/repos/{repo}/statuses/{head_sha}"
+          payload = {
+              "state": "success",
+              "description": f"Approved and overridden by @{commenter}",
+              "context": "vibe-guard"
+          }
+          try:
+              github_request("POST", status_url, payload)
+              print(f"[*] Successfully set vibe-guard status check to success for commit {head_sha}.")
+              
+              # 5. React to comment (add +1 thumbs up) to acknowledge
+              comment_id = comment.get("id")
+              react_url = f"https://api.github.com/repos/{repo}/issues/comments/{comment_id}/reactions"
+              # GitHub Reactions API requires a specific Accept header for reactions
+              req = urllib.request.Request(react_url, method="POST")
+              req.add_header("Authorization", f"token {token}")
+              req.add_header("Accept", "application/vnd.github.squirrel-girl-preview+json")
+              req.add_header("User-Agent", "vibe-guard-override")
+              body = json.dumps({"content": "+1"}).encode("utf-8")
+              urllib.request.urlopen(req, data=body)
+              print("[*] Added thumbs up reaction to the override comment.")
+          except Exception as e:
+              print(f"[!] Failed to complete override notifications: {e}")
