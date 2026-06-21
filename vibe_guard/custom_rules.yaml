@@ -1,0 +1,17 @@
+rules:
+  - id: hardcoded-api-key
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $VAR = "$VAL"
+          - pattern: |
+              $VAR = '$VAL'
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(api_key|apikey|secret|password|private_key|token|auth_token|api_token)
+      - metavariable-regex:
+          metavariable: $VAL
+          regex: ^[a-zA-Z0-9_\-\.]{16,64}$
+    message: "Potential hardcoded API key, token, or secret detected."
+    languages: [python, javascript]
+    severity: WARNING
