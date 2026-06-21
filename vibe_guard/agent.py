@@ -174,6 +174,12 @@ def simulate_semgrep_scan(
         r"subprocess\.(run|Popen|call|check_output|check_call)\(.*shell\s*=\s*True.*\)"
     )
 
+    # 3. MD5 usage check (medium severity)
+    md5_pattern = re.compile(r"hashlib\.md5\(.*\)")
+
+    # 4. Insecure random usage check (low severity)
+    random_pattern = re.compile(r"\brandom\.(random|randint|choice|randrange)\(.*\)")
+
     for idx, line in enumerate(lines):
         line_num = idx + 1
 
@@ -220,6 +226,54 @@ def simulate_semgrep_scan(
                         "message": "Found subprocess with shell=True. This can lead to command injection if user input is passed.",
                         "lines": line.strip(),
                         "severity": "ERROR",
+                    },
+                    "context": "\n".join(context),
+                }
+            )
+
+        # Check MD5 (medium)
+        match_md5 = md5_pattern.search(line)
+        if match_md5:
+            context = []
+            start = max(0, idx - 5)
+            end = min(len(lines), idx + 6)
+            for c_idx in range(start, end):
+                prefix = "--> " if c_idx == idx else "    "
+                context.append(f"{prefix}{c_idx + 1}: {lines[c_idx]}")
+
+            findings.append(
+                {
+                    "check_id": "python.lang.security.audit.insecure-hash-algorithms.insecure-hash-algorithm-md5",
+                    "path": file_path,
+                    "start": {"line": line_num},
+                    "extra": {
+                        "message": "Insecure hash algorithm MD5 used. Use SHA-256 or SHA-3 instead.",
+                        "lines": line.strip(),
+                        "severity": "WARNING",
+                    },
+                    "context": "\n".join(context),
+                }
+            )
+
+        # Check random (low)
+        match_random = random_pattern.search(line)
+        if match_random:
+            context = []
+            start = max(0, idx - 5)
+            end = min(len(lines), idx + 6)
+            for c_idx in range(start, end):
+                prefix = "--> " if c_idx == idx else "    "
+                context.append(f"{prefix}{c_idx + 1}: {lines[c_idx]}")
+
+            findings.append(
+                {
+                    "check_id": "python.lang.security.audit.crypto.bad-random.bad-random",
+                    "path": file_path,
+                    "start": {"line": line_num},
+                    "extra": {
+                        "message": "Standard pseudo-random number generator used. For security-sensitive applications, use the secrets module instead.",
+                        "lines": line.strip(),
+                        "severity": "INFO",
                     },
                     "context": "\n".join(context),
                 }
